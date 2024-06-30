@@ -188,25 +188,49 @@ class STNxyz(nn.Module):
         return x
 
 class FrustumPointNetv1(nn.Module):
-    def __init__(self,n_classes=3,n_channel=4):
+    def __init__(self,n_classes=4,n_channel=3):
         super(FrustumPointNetv1, self).__init__()
         self.n_classes = n_classes
-        self.InsSeg = PointNetInstanceSeg(n_classes=3,n_channel=n_channel)
-        self.STN = STNxyz(n_classes=3)
-        self.est = PointNetEstimation(n_classes=3)
+        self.InsSeg = PointNetInstanceSeg(n_classes=4,n_channel=n_channel)
+        self.STN = STNxyz(n_classes=4)
+        self.est = PointNetEstimation(n_classes=4)
 
     def forward(self, pts, one_hot_vec):#bs,4,n
         # 3D Instance Segmentation PointNet
-        logits = self.InsSeg(pts,one_hot_vec)#bs,n,2
+        # logits = self.InsSeg(pts,one_hot_vec)#bs,n,2
+        # print('logits:',logits.shape,logits.dtype)
+
 
         # Mask Point Centroid
-        object_pts_xyz, mask_xyz_mean, mask = \
-                 point_cloud_masking(pts, logits)###logits.detach()
+        # logits = torch.zeros(size=(pts.shape[0],1024,2),dtype=torch.float32).cuda()
+        # logits[:, :, :] = 0
+        # logits[:, :, :] = 1
+
+        # print('pts:',pts.shape,pts.dtype)
+        # print('one_hot_vec:',one_hot_vec.shape,one_hot_vec.dtype)
+        #
+        # # All logits correct
+        # # logits = bs,n,2
+        #
+        # # Mask Point Centroid
+        # object_pts_xyz, mask_xyz_mean, mask = \
+        #          point_cloud_masking(pts, logits)###logits.detach()
+
+        # print('pts:',pts.shape,pts.dtype)
+        pts = pts[:, :3, :]
+        # print(one_hot_vec)
+
+        clusters_mean = torch.mean(pts, 2).cuda()
+        reshaped_center_delta = clusters_mean.view(clusters_mean.shape[0], -1, 1)
+        repeated_center_delta = reshaped_center_delta.repeat(1, 1, pts.shape[-1])
+        object_pts_xyz = pts - repeated_center_delta
+
+
 
         # T-Net
         object_pts_xyz = object_pts_xyz.cuda()
         center_delta = self.STN(object_pts_xyz,one_hot_vec)#(32,3)
-        stage1_center = center_delta + mask_xyz_mean#(32,3)
+        stage1_center = center_delta + clusters_mean#(32,3)
 
         if(np.isnan(stage1_center.cpu().detach().numpy()).any()):
             ipdb.set_trace()
@@ -215,6 +239,10 @@ class FrustumPointNetv1(nn.Module):
 
         # 3D Box Estimation
         box_pred = self.est(object_pts_xyz_new,one_hot_vec)#(32, 59)
+
+        #dummy logits
+        logits = 0
+        mask = 0
 
         center_boxnet, \
         heading_scores, heading_residuals_normalized, heading_residuals, \

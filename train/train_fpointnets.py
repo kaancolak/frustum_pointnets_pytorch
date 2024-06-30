@@ -18,9 +18,12 @@ from tqdm import tqdm
 from torch.utils.tensorboard import SummaryWriter
 import provider_fpointnet as provider
 
+random.seed(42)  # Set a random seed for reproducibility
+torch.manual_seed(42)  # Set a seed for PyTorch operations
+
 parser = argparse.ArgumentParser()
 ###parser.add_argument('--gpu', type=int, default=0, help='GPU to use [default: GPU 0]')
-parser.add_argument('--model', default='frustum_pointnets_v1_old_1', help='Model name [default: frustum_pointnets_v1]')
+parser.add_argument('--model', default='frustum_pointnets_v1_old', help='Model name [default: frustum_pointnets_v1]')
 parser.add_argument('--log_dir', default='log', help='Log dir [default: log]')
 parser.add_argument('--num_point', type=int, default=1024, help='Point Number [default: 2048]')
 parser.add_argument('--max_epoch', type=int, default=150, help='Epoch to run [default: 201]')
@@ -69,9 +72,16 @@ elif FLAGS.objtype == 'caronly':
     n_classes = 1
 MODEL = importlib.import_module(FLAGS.model) # import network module
 MODEL_FILE = os.path.join(ROOT_DIR, 'models', FLAGS.model+'.py')
+
 LOG_DIR = FLAGS.log_dir + '/' + NAME
-if not os.path.exists(LOG_DIR): os.mkdir(LOG_DIR)
-if not os.path.exists(LOG_DIR + '/' + NAME): os.mkdir(LOG_DIR + '/' + NAME)
+LOG_DIR = os.getcwd() + '/' + LOG_DIR
+
+
+print("log dir: %s" % (os.getcwd() + LOG_DIR))
+if not os.path.exists(LOG_DIR):
+    os.mkdir(LOG_DIR)
+if not os.path.exists(LOG_DIR + '/' + NAME):
+    os.mkdir(LOG_DIR + '/' + NAME)
 os.system('cp %s %s' % (MODEL_FILE, LOG_DIR)) # bkp of model def
 os.system('cp %s %s' % (os.path.join(BASE_DIR, 'train_fpointnets.py'), LOG_DIR))
 LOG_FOUT = open(os.path.join(LOG_DIR, 'log_train.txt'), 'w')
@@ -83,12 +93,17 @@ LOG_FOUT.write(str(FLAGS)+'\n')
 
 # Load Frustum Datasets. Use default data paths.
 if FLAGS.dataset == 'kitti':
-    TRAIN_DATASET = provider.FrustumDataset(npoints=NUM_POINT, split=FLAGS.train_sets,
-        rotate_to_center=True, random_flip=True, random_shift=True, one_hot=True,
-        overwritten_data_path='kitti/frustum_'+FLAGS.objtype+'_'+FLAGS.train_sets+'.pickle')
-    TEST_DATASET = provider.FrustumDataset(npoints=NUM_POINT, split=FLAGS.val_sets,
-        rotate_to_center=True, one_hot=True,
-        overwritten_data_path='kitti/frustum_'+FLAGS.objtype+'_'+FLAGS.val_sets+'.pickle')
+    TRAIN_DATASET = provider.PointCloudDataset("/home/kaan/dataset_concat/", ['car', 'truck', 'bus', 'trailer'], min_points=10, train=True, augment_data=True,
+                                      use_mirror=True, use_shift=True)
+    TEST_DATASET = provider.PointCloudDataset("/home/kaan/dataset_concat/", ['car', 'truck', 'bus', 'trailer'], min_points=10, train=False, augment_data=True,
+                                      use_mirror=True, use_shift=True)
+
+    # TRAIN_DATASET = provider.FrustumDataset(npoints=NUM_POINT, split=FLAGS.train_sets,
+    #     rotate_to_center=True, random_flip=True, random_shift=True, one_hot=True,
+    #     overwritten_data_path='kitti/frustum_'+FLAGS.objtype+'_'+FLAGS.train_sets+'.pickle')
+    # TEST_DATASET = provider.FrustumDataset(npoints=NUM_POINT, split=FLAGS.val_sets,
+    #     rotate_to_center=True, one_hot=True,
+    #     overwritten_data_path='kitti/frustum_'+FLAGS.objtype+'_'+FLAGS.val_sets+'.pickle')
 elif FLAGS.dataset == 'nuscenes2kitti':
     SENSOR = FLAGS.sensor
     overwritten_data_path_prefix = 'nuscenes2kitti/frustum_' +FLAGS.objtype + '_' + SENSOR + '_'
@@ -169,7 +184,7 @@ def test_one_epoch(model, loader):
         size_scores, size_residuals_normalized, size_residuals, center = \
             model(batch_data, batch_one_hot_vec)
 
-        logits = logits.detach()
+        # logits = logits.detach()
         stage1_center = stage1_center.detach()
         center_boxnet = center_boxnet.detach()
         heading_scores = heading_scores.detach()
@@ -220,9 +235,10 @@ def test_one_epoch(model, loader):
         test_iou2d += np.sum(iou2ds)
         test_iou3d += np.sum(iou3ds)
 
-        correct = torch.argmax(logits, 2).eq(batch_label.detach().long()).cpu().numpy()
-        accuracy = np.sum(correct) / float(NUM_POINT)
-        test_acc += accuracy
+        # correct = torch.argmax(logits, 2).eq(batch_label.detach().long()).cpu().numpy()
+        # accuracy = np.sum(correct) / float(NUM_POINT)
+        # test_acc += accuracy
+        test_acc = 0
 
         test_iou3d_acc += np.sum(iou3ds >= 0.7)
 
@@ -268,10 +284,10 @@ def train():
     random.seed(SEED)
     torch.backends.cudnn.deterministic = True
     blue = lambda x: '\033[94m' + x + '\033[0m'
-
+    from model_util_old import FrustumPointNetLoss
     # set model
-    if FLAGS.model == 'frustum_pointnets_v1_old_1':
-        from frustum_pointnets_v1_old_1 import FrustumPointNetv1
+    if FLAGS.model == 'frustum_pointnets_v1_old':
+        from models.frustum_pointnets_v1_old import FrustumPointNetv1
         FrustumPointNet = FrustumPointNetv1(n_classes=n_classes).cuda()
 
     # load pre-trained model
@@ -330,9 +346,20 @@ def train():
         for i, data in tqdm(enumerate(train_dataloader),\
                 total=len(train_dataloader), smoothing=0.9):
             n_samples += data[0].shape[0]
+
+            # if i == 1:
+            #     point_set, seg, box3d_center, angle_class, angle_residual, \
+            #         size_class, size_residual, rot_angle, one_hot_vec = data
+            #     print('point_set:', box3d_center)
+
             #for debug
             if FLAGS.debug==True:
                 if i==1 :
+
+                    point_set, seg, box3d_center, angle_class, angle_residual, \
+                        size_class, size_residual, rot_angle, one_hot_vec = data
+                    print('point_set:',box3d_center)
+
                     break
 
             '''
@@ -424,9 +451,10 @@ def train():
             train_iou3d += np.sum(iou3ds)
             train_iou3d_acc += np.sum(iou3ds>=0.7)
 
-            correct = torch.argmax(logits, 2).eq(batch_label.long()).detach().cpu().numpy()
-            accuracy = np.sum(correct)
-            train_acc += accuracy
+            # correct = torch.argmax(logits, 2).eq(batch_label.long()).detach().cpu().numpy()
+            # accuracy = np.sum(correct)
+            # train_acc += accuracy
+            train_acc = 0
             if FLAGS.return_all_loss:
                 train_mask_loss += mask_loss.item()
                 train_center_loss += center_loss.item()
@@ -537,7 +565,7 @@ def train():
         if test_iou3d_acc >= best_iou3d_acc:
             best_iou3d_acc = test_iou3d_acc
             best_epoch = epoch + 1
-            if epoch > MAX_EPOCH / 5:
+            if epoch > 0:
                 savepath = LOG_DIR + '/acc%04f-epoch%03d.pth' % \
                            (test_iou3d_acc, epoch)
                 log_string('save to:%s'%(savepath))
@@ -565,9 +593,67 @@ def train():
     log_string('model saved to %s' % (best_save_path))
     writer.close()
 
+
+
+def vis():
+    import open3d as o3d
+    from provider_fpointnet import class2size, class2angle, get_3d_box
+
+    def set_top_down_view(vis):
+        ctr = vis.get_view_control()
+        ctr.set_up([0, -1, 0])  # Set up vector to negative Z-axis
+        ctr.set_front([0, 0, -1])  # Set front vector to negative Y-axis
+        ctr.set_lookat([0, 0, 0])  # Set the look-at point to the origin
+        ctr.set_zoom(0.5)  # Adjust zoom level if necessary
+
+    def create_bounding_box(corners, color=[1, 0, 0]):
+        lines = [
+            [0, 1], [1, 2], [2, 3], [3, 0],
+            [4, 5], [5, 6], [6, 7], [7, 4],
+            [0, 4], [1, 5], [2, 6], [3, 7]
+        ]
+        colors = [color for _ in lines]
+        line_set = o3d.geometry.LineSet()
+        line_set.points = o3d.utility.Vector3dVector(corners)
+        line_set.lines = o3d.utility.Vector2iVector(lines)
+        line_set.colors = o3d.utility.Vector3dVector(colors)
+        return line_set
+
+
+    point_set, seg, box3d_center, angle_class, angle_residual, \
+        size_class, size_residual, rot_angle, one_hot_vec = TRAIN_DATASET.__getitem__(10)
+
+    print('point_set:', point_set[:,:3].shape)
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(point_set[:,:3])
+
+
+    box3d_from_label = get_3d_box(class2size(size_class, size_residual), class2angle(angle_class, angle_residual, 12),box3d_center)
+    print('box3d_from_label:', box3d_from_label.shape)
+    print('box3d_from_label:', box3d_center)
+    bbox = create_bounding_box(box3d_from_label, color=[0, 1, 0])
+
+    axes = o3d.geometry.TriangleMesh.create_coordinate_frame(size=1, origin=[0, 0, 0])
+    # Visualize the point cloud and bounding box
+    vis = o3d.visualization.Visualizer()
+    vis.create_window()
+    vis.add_geometry(pcd)
+    vis.add_geometry(bbox)
+    # vis.add_geometry(bbox2)
+    vis.add_geometry(axes)
+
+    # Set the view to top-down
+    set_top_down_view(vis)
+
+    # Run the visualizer
+    vis.run()
+    vis.destroy_window()
+
+
 if __name__ == "__main__":
     log_string('pid: %s'%(str(os.getpid())))
     print('Your FLAGS:')
     print(FLAGS)
     train()
+    # vis()
     LOG_FOUT.close()

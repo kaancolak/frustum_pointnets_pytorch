@@ -19,6 +19,8 @@ from model_util_old import g_type_mean_size
 from model_util_old import NUM_HEADING_BIN, NUM_SIZE_CLUSTER
 import ipdb
 
+from torch.utils.data import Dataset, DataLoader
+
 try:
     raw_input  # Python 2
 except NameError:
@@ -127,9 +129,10 @@ class FrustumDataset(object):
         self.one_hot = one_hot
         if overwritten_data_path is None:
             overwritten_data_path = os.path.join(ROOT_DIR,
-                                                 'kitti/frustum_carpedcyc_%s.pickle' % (split))
+                                                 'kitti/frustum_caronly_%s.pickle' % (split))
 
         self.from_rgb_detection = from_rgb_detection
+
         if from_rgb_detection:
             with open(overwritten_data_path, 'rb') as fp:
                 self.id_list = pickle.load(fp)
@@ -159,22 +162,25 @@ class FrustumDataset(object):
         ''' Get index-th element from the picked file dataset. '''
         # ------------------------------ INPUTS ----------------------------
         rot_angle = self.get_center_view_rot_angle(index)
-        # np.pi/2.0 + self.frustum_angle_list [index]float,[-pi/2,pi/2]
 
         # Compute one hot vector
-        if self.one_hot:  # True
+        if self.one_hot:
             cls_type = self.type_list[index]
             assert (cls_type in ['Car', 'Pedestrian', 'Cyclist'])
             one_hot_vec = np.zeros((3))
             one_hot_vec[g_type2onehotclass[cls_type]] = 1
 
         # Get point cloud
-        if self.rotate_to_center:  # True
-            point_set = self.get_center_view_point_set(index)  # (n,4) #pts after Frustum rotation
+        if self.rotate_to_center:
+            point_set = self.get_center_view_point_set(index)
         else:
             point_set = self.input_list[index]
 
-        # ipdb.set_trace()
+
+        # Filter point according to seg
+        seg = self.label_list[index]
+        point_set = point_set[seg == 1]
+
         # Resample
         choice = np.random.choice(point_set.shape[0], self.npoints, replace=True)
         point_set = point_set[choice, :]
@@ -186,24 +192,25 @@ class FrustumDataset(object):
                 return point_set, rot_angle, self.prob_list[index]
 
         # ------------------------------ LABELS ----------------------------
-        seg = self.label_list[index]
-        seg = seg[choice]  # (1024,),array([0., 1., 0., ..., 1., 1., 1.])
+
+        seg = seg[choice]
 
         # Get center point of 3D box
-        if self.rotate_to_center:  # True
-            box3d_center = self.get_center_view_box3d_center(index)  # array([ 0.07968819,  0.39      , 46.06915834])
+        if self.rotate_to_center:
+            box3d_center = self.get_center_view_box3d_center(index)
         else:
             box3d_center = self.get_box3d_center(index)
 
         # Heading
-        if self.rotate_to_center:  # True
-            heading_angle = self.heading_list[index] - rot_angle  # -1.6480684951683866 #alpha
+        if self.rotate_to_center:
+            heading_angle = self.heading_list[index] - rot_angle
         else:
-            heading_angle = self.heading_list[index]  # rotation_y
+            heading_angle = self.heading_list[index]
 
         # Size
         size_class, size_residual = size2class(self.size_list[index],
-                                               self.type_list[index])  # 5, array([0.25717603, 0.00293633, 0.12301873])
+                                               self.type_list[index])
+
         # Data Augmentation
         if self.random_flip:
             # note: rot_angle won't be correct if we have random_flip
@@ -213,20 +220,32 @@ class FrustumDataset(object):
                 box3d_center[0] *= -1
                 heading_angle = np.pi - heading_angle
         if self.random_shift:
-            dist = np.sqrt(np.sum(box3d_center[0] ** 2 + box3d_center[1] ** 2))
-            shift = np.clip(np.random.randn() * dist * 0.05, dist * 0.8, dist * 1.2)
-            point_set[:, 2] += shift
-            box3d_center[2] += shift
+
+            # dist = np.sqrt(np.sum(box3d_center[0] ** 2 + box3d_center[1] ** 2))
+            # rand = np.random.randn()
+            #
+            # if dist * 0.8 > rand * dist * 1.0 and dist * 1.2 < rand * dist * 0.05:
+            #     print("dist: ", dist)
+            #
+            # shift = np.clip(rand * dist * 0.05, dist * 0.8, dist * 1.2)
+            # point_set[:, 2] += shift
+            # box3d_center[2] += shift
+
+            rand = np.random.uniform(0.8, 1.2)
+            # shift = np.clip(rand * dist, dist * 0.8, dist * 1.2)
+            point_set[:, 2] += rand
+            box3d_center[2] += rand
 
         angle_class, angle_residual = angle2class(heading_angle,
                                                   NUM_HEADING_BIN)
 
+
         if self.one_hot:
             return point_set, seg, box3d_center, angle_class, angle_residual, \
-                   size_class, size_residual, rot_angle, one_hot_vec
+                size_class, size_residual, rot_angle, one_hot_vec
         else:
             return point_set, seg, box3d_center, angle_class, angle_residual, \
-                   size_class, size_residual, rot_angle
+                size_class, size_residual, rot_angle
 
     def get_center_view_rot_angle(self, index):
         ''' Get the frustum rotation angle, it isshifted by pi/2 so that it
@@ -263,6 +282,143 @@ class FrustumDataset(object):
         return rotate_pc_along_y(point_set, \
                                  self.get_center_view_rot_angle(index))
 
+
+class PointCloudDataset(Dataset):
+    def __init__(self, data_dir, classes, num_points=512, min_points=10, train=True,
+                 augment_data=False,
+                 use_mirror=False,
+                 use_shift=False):
+        self.data_dir = data_dir
+        self.classes = classes
+        self.num_points = num_points
+
+        self.augment_data = augment_data
+        self.use_mirror = use_mirror
+        self.use_shift = use_shift
+
+        if train:
+            db_info = self.data_dir + "dbinfos_train.pkl"
+        else:
+            db_info = self.data_dir + "dbinfos_val.pkl"
+
+        with open(db_info, 'rb') as f:
+            data = pickle.load(f)
+
+
+
+        self.files = []
+        self.bounding_boxes = []
+        self.labels = []
+        for c in classes:
+            self.files += [d['path'] for d in data[c] if d['num_points_in_gt'] > min_points]
+            self.bounding_boxes += [d['box3d_lidar'] for d in data[c] if d['num_points_in_gt'] > min_points]
+            self.labels += [d['name'] for d in data[c] if d['num_points_in_gt'] > min_points]
+
+    def __len__(self):
+        return len(self.files)
+
+    def __getitem__(self, idx):
+        point_path = self.data_dir + self.files[idx]
+
+        if self.labels[idx] in point_path:
+            with open(point_path, 'rb') as f:
+                obj_points = np.fromfile(f, dtype=np.float32).reshape(-1, 5)
+        else:
+            with open(point_path, 'rb') as f:
+                obj_points = np.fromfile(f, dtype=np.float32).reshape(-1, 3)
+
+        obj_points = obj_points[:, :3]
+
+        #Shuffle points order rondomly
+        shuffled_indices = np.random.permutation(len(obj_points))
+        obj_points = obj_points[shuffled_indices]
+
+        obj_points = self.pad_or_sample_points(obj_points, self.num_points)
+
+
+        obj_points[:, :3] += self.bounding_boxes[idx][:3]  # normalized to real position
+
+        bounding_box = self.bounding_boxes[idx]
+
+        T = np.array([
+            [1, 0, 0],
+            [0, 0, -1],
+            [0, 1, 0]
+        ])
+
+        obj_points = np.dot(obj_points, T.T)
+
+        # Step 2: Transform the bounding boxes
+        # Swap y and z axes for centers
+
+        bounding_box[:3] = np.dot(bounding_box[:3], T.T)
+        bounding_box[6] = -bounding_box[6]
+        bounding_box[1] -= bounding_box[5] / 2
+
+
+        if self.augment_data:
+
+            if self.use_mirror:
+                if np.random.random() > 0.5:  # 50% chance flipping
+                    obj_points[:, 0] *= -1
+                    bounding_box[0] *= -1
+                    bounding_box[6] = np.pi - bounding_box[6]
+
+            if self.use_shift:
+                shifter = np.random.uniform(0.95, 1.05)
+                obj_points[:, :2] *= shifter  # Shift the point cloud
+                bounding_box[:2] *= shifter  # Shift the center of the bounding box
+
+            # obj_points, bounding_box = self.rotate_point_cloud(obj_points, bounding_box)
+
+        one_hot_vector = np.zeros(len(self.classes))
+        ind = self.classes.index(self.labels[idx])
+        one_hot_vector[ind] = 1.
+        box_center = bounding_box[:3]
+        box_size = bounding_box[3:6]
+
+        size_class, residual = size2class(box_size, self.labels[idx])
+        yaw = bounding_box[6]
+        angle_class, angle_residual = angle2class(yaw,
+                                                       NUM_HEADING_BIN)
+
+        seg = 0
+        rot_angle = 0
+        return obj_points, seg, box_center, angle_class, angle_residual, \
+            size_class, residual, rot_angle, one_hot_vector
+
+    def pad_or_sample_points(self, points, num_points):
+        # Padding using duplicate of the correct points, maybe alternative padding with zeros
+        if len(points) > num_points:
+            sampled_indices = np.random.choice(len(points), num_points, replace=False)
+            sampled_points = points[sampled_indices]
+        elif len(points) < num_points:
+            pad_indices = np.random.choice(len(points), num_points - len(points), replace=True)
+            pad_points = points[pad_indices]
+            sampled_points = np.vstack((points, pad_points))
+        else:
+            sampled_points = points
+        return sampled_points
+
+
+    def mirror_point_cloud(self, point_cloud, label, plane):
+        """
+        Mirror the point cloud and label along the specified plane.
+        """
+        mirrored_point_cloud = np.copy(point_cloud)
+        mirrored_label = np.copy(label)
+
+        if plane == 'xz':
+            mirrored_point_cloud[:, 1] = -mirrored_point_cloud[:, 1]
+            mirrored_label[1] = -mirrored_label[1]  # Mirror y-coordinate of box center
+        elif plane == 'yz':
+            mirrored_point_cloud[:, 0] = -mirrored_point_cloud[:, 0]
+            mirrored_label[0] = -mirrored_label[0]  # Mirror x-coordinate of box center
+
+        # Adjust the rotation for the mirror
+        mirrored_label[6] = -mirrored_label[6]
+
+        return mirrored_point_cloud, mirrored_label
 
 # ----------------------------------
 # Helper functions for evaluation
@@ -377,6 +533,7 @@ if __name__ == '__main__':
                'real_size:', g_type_mean_size[g_class2type[data[5]]] + data[6]))
         print(('Frustum angle: ', dataset.frustum_angle_list[i]))
         median_list.append(np.median(data[0][:, 0]))
+
         print((data[2], dataset.box3d_list[i], median_list[-1]))
         box3d_from_label = get_3d_box(class2size(data[5], data[6]), class2angle(data[3], data[4], 12), data[2])
         ps = data[0]

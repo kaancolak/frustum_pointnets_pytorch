@@ -1,0 +1,6 @@
+dataset/*
+.idea
+log
+kitti/*
+runs/*
+*.pyc

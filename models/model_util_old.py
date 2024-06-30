@@ -2,6 +2,7 @@ import os
 import sys
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(BASE_DIR)
+print("Kaan")
 import numpy as np
 import torch
 import ipdb
@@ -16,14 +17,14 @@ import torch.nn.functional as F
 NUM_HEADING_BIN = 12
 NUM_SIZE_CLUSTER = 8 # one cluster for each type
 NUM_OBJECT_POINT = 512
-g_type2class={'Car':0, 'Van':1, 'Truck':2, 'Pedestrian':3,
+g_type2class={'car': 0, 'truck': 1, 'bus': 2, 'trailer': 3,
               'Person_sitting':4, 'Cyclist':5, 'Tram':6, 'Misc':7}
 g_class2type = {g_type2class[t]:t for t in g_type2class}
-g_type2onehotclass = {'Car': 0, 'Pedestrian': 1, 'Cyclist': 2}
-g_type_mean_size = {'Car': np.array([3.88311640418,1.62856739989,1.52563191462]),
-                    'Van': np.array([5.06763659,1.9007158,2.20532825]),
-                    'Truck': np.array([10.13586957,2.58549199,3.2520595]),
-                    'Pedestrian': np.array([0.84422524,0.66068622,1.76255119]),
+g_type2onehotclass = {'car': 0, 'Pedestrian': 1, 'Cyclist': 2}
+g_type_mean_size = {'car': np.array([4.6344314, 1.9600292, 1.7375569]),
+                    'truck': np.array([6.936331, 2.5178623, 2.8506238]),
+                    'bus': np.array([11.194943, 2.9501154, 3.4918275]),
+                    'trailer': np.array([12.275775, 2.9231303, 3.87086]),
                     'Person_sitting': np.array([0.80057803,0.5983815,1.27450867]),
                     'Cyclist': np.array([1.76282397,0.59706367,1.73698127]),
                     'Tram': np.array([16.17150617,2.53246914,3.53079012]),
@@ -89,8 +90,11 @@ def point_cloud_masking(pts, logits, xyz_only=True):
     mask = mask.unsqueeze(1).float()# (bs, 1, n)
     mask_count = mask.sum(2,keepdim=True).repeat(1, 3, 1)  # (bs, 3, 1)
     pts_xyz = pts[:, :3, :]  # (bs,3,n)
+
     mask_xyz_mean = (mask.repeat(1, 3, 1) * pts_xyz).sum(2,keepdim=True)  # (bs, 3, 1)
     mask_xyz_mean = mask_xyz_mean / torch.clamp(mask_count,min=1)  # (bs, 3, 1)
+
+
     mask = mask.view(bs,-1)  # (bs,n)
     pts_xyz_stage1 = pts_xyz - mask_xyz_mean.repeat(1, 1, n_pts)
 
@@ -240,11 +244,11 @@ class FrustumPointNetLoss(nn.Module):
         box_loss_weight: float scalar
         '''
         ###print(heading_class_label.cpu().detach().numpy())
-        bs = logits.shape[0]
+        bs = center.shape[0]
         # 3D Instance Segmentation PointNet Loss
-        logits = F.log_softmax(logits.view(-1,2),dim=1)#torch.Size([32768, 2])
-        mask_label = mask_label.view(-1).long()#torch.Size([32768])
-        mask_loss = F.nll_loss(logits, mask_label)#tensor(0.6361, grad_fn=<NllLossBackward>)
+        # logits = F.log_softmax(logits.view(-1,2),dim=1)#torch.Size([32768, 2])
+        # mask_label = mask_label.view(-1).long()#torch.Size([32768])
+        # mask_loss = F.nll_loss(logits, mask_label)#tensor(0.6361, grad_fn=<NllLossBackward>)
 
         # Center Regression Loss
         center_dist = torch.norm(center-center_label,dim=1)#(32,)
@@ -256,7 +260,7 @@ class FrustumPointNetLoss(nn.Module):
         # Heading Loss
         heading_class_loss = F.nll_loss(F.log_softmax(heading_scores,dim=1), \
                                         heading_class_label.long())#tensor(2.4505, grad_fn=<NllLossBackward>)
-        hcls_onehot = torch.eye(NUM_HEADING_BIN)[heading_class_label.long()].cuda()  # 32,12
+        hcls_onehot = torch.eye(NUM_HEADING_BIN)[heading_class_label.long().cpu()].cuda()  # 32,12
         heading_residuals_normalized_label = \
             heading_residuals_label / (np.pi / NUM_HEADING_BIN)  # 32,
         heading_residuals_normalized_dist = torch.sum( \
@@ -269,7 +273,7 @@ class FrustumPointNetLoss(nn.Module):
         size_class_loss = F.nll_loss(F.log_softmax(size_scores,dim=1),\
                     size_class_label.long())#tensor(2.0240, grad_fn=<NllLossBackward>)
 
-        scls_onehot = torch.eye(NUM_SIZE_CLUSTER)[size_class_label.long()].cuda()  # 32,8
+        scls_onehot = torch.eye(NUM_SIZE_CLUSTER)[size_class_label.long().cpu()].cuda()  # 32,8
         scls_onehot_repeat = scls_onehot.view(-1, NUM_SIZE_CLUSTER, 1).repeat(1, 1, 3)  # 32,8,3
         predicted_size_residuals_normalized_dist = torch.sum( \
             size_residuals_normalized * scls_onehot_repeat.cuda(), dim=1)#32,3
@@ -314,7 +318,7 @@ class FrustumPointNetLoss(nn.Module):
         corners_loss = huber_loss(corners_dist, delta=1.0)
 
         # Weighted sum of all losses
-        total_loss = mask_loss + box_loss_weight * (center_loss + \
+        total_loss = box_loss_weight * (center_loss + \
                     heading_class_loss + size_class_loss + \
                     heading_residuals_normalized_loss * 20 + \
                     size_residuals_normalized_loss * 20 + \

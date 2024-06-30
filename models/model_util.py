@@ -275,6 +275,7 @@ class FrustumPointNetLoss(nn.Module):
             heading_residual_label / (np.pi / NUM_HEADING_BIN)  # 32,
         heading_residual_normalized_dist = torch.sum( \
             heading_residual_normalized * hcls_onehot.float(), dim=1)  # 32,
+
         ### Only compute reg loss on gt label
         heading_residual_normalized_loss = \
             huber_loss(heading_residual_normalized_dist -
