@@ -4,3 +4,6 @@ log
 kitti/*
 runs/*
 *.pyc
+*.so
+build/
+rd3d.egg-info/

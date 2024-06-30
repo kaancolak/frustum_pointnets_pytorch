@@ -287,8 +287,10 @@ def train():
     from model_util_old import FrustumPointNetLoss
     # set model
     if FLAGS.model == 'frustum_pointnets_v1_old':
-        from models.frustum_pointnets_v1_old import FrustumPointNetv1
-        FrustumPointNet = FrustumPointNetv1(n_classes=n_classes).cuda()
+        from models.frustum_pointnets_v2 import FrustumPointNetv2
+        # from models.frustum_pointnets_v1_old import FrustumPointNetv1
+        FrustumPointNet = FrustumPointNetv2(n_classes=n_classes).cuda()
+        # FrustumPointNet = FrustumPointNetv1(n_classes=n_classes).cuda()
 
     # load pre-trained model
     if FLAGS.ckpt:
