@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
-from utils import common_utils
-from utils.spconv_utils import spconv
+from utilss import common_utils
+from utilss.spconv_utils import spconv
 from ops.roiaware_pool3d.roiaware_pool3d_utils import points_in_boxes_gpu
 from backbones_3d.focal_sparse_conv.focal_sparse_utils import split_voxels, check_repeat, FocalLoss
 

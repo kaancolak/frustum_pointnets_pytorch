@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from functools import partial
 from .builder import grouper, querier
-from utils.common_utils import ScopeTimer, gather, apply1d
+from utilss.common_utils import ScopeTimer, gather, apply1d
 
 
 class PointGrouping(nn.Module):

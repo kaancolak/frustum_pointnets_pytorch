@@ -45,71 +45,10 @@ g_mean_size_arr = np.zeros((NUM_SIZE_CLUSTER, 3)) # size clustrs
 for i in range(NUM_SIZE_CLUSTER):
     g_mean_size_arr[i,:] = g_type_mean_size[g_class2type[i]]
 
-class PointNetInstanceSeg(nn.Module):
-    def __init__(self,n_classes=3,n_channel=4):
-        '''v1 3D Instance Segmentation PointNet
-        :param n_classes:3
-        :param one_hot_vec:[bs,n_classes]
-        '''
-        super(PointNetInstanceSeg, self).__init__()
-        self.conv1 = nn.Conv1d(n_channel, 64, 1)
-        self.conv2 = nn.Conv1d(64, 64, 1)
-        self.conv3 = nn.Conv1d(64, 64, 1)
-        self.conv4 = nn.Conv1d(64, 128, 1)
-        self.conv5 = nn.Conv1d(128, 1024, 1)
-        self.bn1 = nn.BatchNorm1d(64)
-        self.bn2 = nn.BatchNorm1d(64)
-        self.bn3 = nn.BatchNorm1d(64)
-        self.bn4 = nn.BatchNorm1d(128)
-        self.bn5 = nn.BatchNorm1d(1024)
-
-        self.n_classes = n_classes
-        self.dconv1 = nn.Conv1d(1088+n_classes, 512, 1)
-        self.dconv2 = nn.Conv1d(512, 256, 1)
-        self.dconv3 = nn.Conv1d(256, 128, 1)
-        self.dconv4 = nn.Conv1d(128, 128, 1)
-        self.dropout = nn.Dropout(p=0.5)
-        self.dconv5 = nn.Conv1d(128, 2, 1)
-        self.dbn1 = nn.BatchNorm1d(512)
-        self.dbn2 = nn.BatchNorm1d(256)
-        self.dbn3 = nn.BatchNorm1d(128)
-        self.dbn4 = nn.BatchNorm1d(128)
-
-    def forward(self, pts, one_hot_vec): # bs,4,n
-        '''
-        :param pts: [bs,4,n]: x,y,z,intensity
-        :return: logits: [bs,n,2],scores for bkg/clutter and object
-        '''
-        bs = pts.size()[0]
-        n_pts = pts.size()[2]
-
-        out1 = F.relu(self.bn1(self.conv1(pts))) # bs,64,n
-        out2 = F.relu(self.bn2(self.conv2(out1))) # bs,64,n
-        out3 = F.relu(self.bn3(self.conv3(out2))) # bs,64,n
-        out4 = F.relu(self.bn4(self.conv4(out3)))# bs,128,n
-        out5 = F.relu(self.bn5(self.conv5(out4)))# bs,1024,n
-        global_feat = torch.max(out5, 2, keepdim=True)[0] #bs,1024,1
-
-        expand_one_hot_vec = one_hot_vec.view(bs,-1,1)#bs,3,1
-        expand_global_feat = torch.cat([global_feat, expand_one_hot_vec],1)#bs,1027,1
-        expand_global_feat_repeat = expand_global_feat.view(bs,-1,1)\
-                .repeat(1,1,n_pts)# bs,1027,n
-        concat_feat = torch.cat([out2,\
-            expand_global_feat_repeat],1)
-        # bs, (641024+3)=1091, n
-
-        x = F.relu(self.dbn1(self.dconv1(concat_feat)))#bs,512,n
-        x = F.relu(self.dbn2(self.dconv2(x)))#bs,256,n
-        x = F.relu(self.dbn3(self.dconv3(x)))#bs,128,n
-        x = F.relu(self.dbn4(self.dconv4(x)))#bs,128,n
-        x = self.dropout(x)
-        x = self.dconv5(x)#bs, 2, n
-
-        seg_pred = x.transpose(2,1).contiguous()#bs, n, 2
-        return seg_pred
 
 class PointNetEstimation(nn.Module):
     def __init__(self,n_classes=3):
+        super(PointNetEstimation, self).__init__()
         self.config = {'NAME': 'GeneralPointNet2MSG', 'ENCODER': [
             {'samplers': [{'name': 'd-fps', 'sample': 128}],
              'groupers': [{'name': 'ball', 'query': {'radius': 0.2, 'neighbour': 16}, 'mlps': [16, 16, 32]},
@@ -205,7 +144,6 @@ class FrustumPointNetv2(nn.Module):
     def __init__(self,n_classes=4,n_channel=3):
         super(FrustumPointNetv2, self).__init__()
         self.n_classes = n_classes
-        self.InsSeg = PointNetInstanceSeg(n_classes=4,n_channel=n_channel)
         self.STN = STNxyz(n_classes=4)
         self.est = PointNetEstimation(n_classes=4)
 

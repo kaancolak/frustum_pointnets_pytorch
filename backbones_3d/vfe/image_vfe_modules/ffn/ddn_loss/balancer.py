@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 
-from .......utils import loss_utils
+from .......utilss import loss_utils
 
 
 class Balancer(nn.Module):

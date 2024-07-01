@@ -213,12 +213,12 @@ class SemanticFarthestPointSampling(PointSampling):
         self.weight_gamma = self.cfg.gamma
         self.mlps = self.build_mlps(self.cfg.mlps, in_channels=input_channels, out_channels=1)
         self.train_dict = {}
-        from .....utils.loss_utils import WeightedBinaryCrossEntropyLoss
+        from .....utilss.loss_utils import WeightedBinaryCrossEntropyLoss
         self.loss_func = WeightedBinaryCrossEntropyLoss()
 
     def assign_targets(self, batch_dict):
         from .....ops.roiaware_pool3d import roiaware_pool3d_utils
-        from .....utils import box_utils
+        from .....utilss import box_utils
 
         def get_point_label(points, gt_boxes, set_ignore_flag=True, extra_width=None):
             """
@@ -310,12 +310,12 @@ class CenterAwareSampling(PointSampling):
                                     in_channels=input_channels,
                                     out_channels=self.output_channels)
         self.train_dict = {}
-        from utils.loss_utils import WeightedClassificationLoss
+        from utilss.loss_utils import WeightedClassificationLoss
         self.loss_func = WeightedClassificationLoss()
 
     def assign_targets(self, batch_dict):
         from ops.roiaware_pool3d import roiaware_pool3d_utils
-        from utils import box_utils
+        from utilss import box_utils
 
         def get_point_label(points, gt_boxes, extra_width=None):
             batch_size, num_points, _ = points.size()
@@ -362,7 +362,7 @@ class CenterAwareSampling(PointSampling):
         self.train_dict.update(t_dict)
 
     def get_loss(self, tb_dict):
-        from .....utils import common_utils
+        from .....utilss import common_utils
 
         def generate_centerness_label(point_base, point_box_labels, pos_mask, epsilon=1e-6):
             """

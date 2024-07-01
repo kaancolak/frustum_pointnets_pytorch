@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 
-from utils.common_utils import ScopeTimer, apply1d
+from utilss.common_utils import ScopeTimer, apply1d
 from .builder import aggregation
 from typing import List
 

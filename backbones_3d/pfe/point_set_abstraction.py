@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 import torch.nn as nn
-from utils.common_utils import gather, ScopeTimer, apply1d
+from utilss.common_utils import gather, ScopeTimer, apply1d
 from .ops.builder import sampler, grouper, aggregation
 
 
@@ -115,12 +115,12 @@ class PointVoteInsCenter(nn.Module):
             self.sa_layers = None
             self.output_channels = self.input_channels
         self.train_dict = {}
-        from ....utils.loss_utils import WeightedSmoothL1Loss
+        from ....utilss.loss_utils import WeightedSmoothL1Loss
         self.reg_loss_func = WeightedSmoothL1Loss()
 
     def assign_targets(self, batch_dict):
         from ....ops.roiaware_pool3d import roiaware_pool3d_utils
-        from ....utils import box_utils
+        from ....utilss import box_utils
 
         def get_point_targets(points, gt_boxes, set_ignore_flag=False, extra_width=None):
             """

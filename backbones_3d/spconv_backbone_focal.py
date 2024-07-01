@@ -1,7 +1,7 @@
 from functools import partial
 
 import torch
-from utils.spconv_utils import spconv
+from utilss.spconv_utils import spconv
 import torch.nn as nn
 
 from .focal_sparse_conv.focal_sparse_conv import FocalSparseConv
