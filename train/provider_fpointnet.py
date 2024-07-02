@@ -20,6 +20,7 @@ from model_util_old import NUM_HEADING_BIN, NUM_SIZE_CLUSTER
 import ipdb
 
 from torch.utils.data import Dataset, DataLoader
+from scipy.spatial.transform import Rotation as R
 
 try:
     raw_input  # Python 2
@@ -176,7 +177,6 @@ class FrustumDataset(object):
         else:
             point_set = self.input_list[index]
 
-
         # Filter point according to seg
         seg = self.label_list[index]
         point_set = point_set[seg == 1]
@@ -220,7 +220,6 @@ class FrustumDataset(object):
                 box3d_center[0] *= -1
                 heading_angle = np.pi - heading_angle
         if self.random_shift:
-
             # dist = np.sqrt(np.sum(box3d_center[0] ** 2 + box3d_center[1] ** 2))
             # rand = np.random.randn()
             #
@@ -238,7 +237,6 @@ class FrustumDataset(object):
 
         angle_class, angle_residual = angle2class(heading_angle,
                                                   NUM_HEADING_BIN)
-
 
         if self.one_hot:
             return point_set, seg, box3d_center, angle_class, angle_residual, \
@@ -304,8 +302,6 @@ class PointCloudDataset(Dataset):
         with open(db_info, 'rb') as f:
             data = pickle.load(f)
 
-
-
         self.files = []
         self.bounding_boxes = []
         self.labels = []
@@ -320,56 +316,115 @@ class PointCloudDataset(Dataset):
     def __getitem__(self, idx):
         point_path = self.data_dir + self.files[idx]
 
+        bounding_box = self.bounding_boxes[idx]
         if self.labels[idx] in point_path:
             with open(point_path, 'rb') as f:
                 obj_points = np.fromfile(f, dtype=np.float32).reshape(-1, 5)
+
+            nuscenes_to_model = np.array([[1.00000000e+00, -8.13701808e-16, 3.42213790e-16],
+                                          [3.42861654e-16, 7.96326711e-04, -9.99999683e-01],
+                                          [8.13429036e-16, 9.99999683e-01, 7.96326711e-04]]
+                                         )
+
+            if not (bounding_box[6] > 2* np.pi/12 and bounding_box[6] < 5*np.pi/12):
+                None
+
+
+            obj_points = obj_points[:, :3]
+            obj_points[:, :3] += bounding_box[:3]  # normalized to real position
+
+            obj_points[:, :3] = np.dot(nuscenes_to_model, obj_points[:, :3].T).T
+            obj_points[:, 1] += bounding_box[5] / 2
+
+            center_to_corner_box3d_numpy = self.center_to_corner_box3d_numpy(bounding_box[0:3], bounding_box[3:6],
+                                                                             bounding_box[6])
+
+            rotated_corners = np.dot(nuscenes_to_model, center_to_corner_box3d_numpy[:, :3].T).T
+
+            center = np.mean(rotated_corners, axis=0)
+            x, y, z = center
+
+            # Calculate yaw angle
+            edge_direction = rotated_corners[1] - rotated_corners[0]  # Direction of one edge of the box
+            yaw = np.arctan2(edge_direction[0], edge_direction[2])
+
+            bounding_box[0], bounding_box[1], bounding_box[2] = x, y, z
+            bounding_box[6] = yaw
+
+
+
         else:
             with open(point_path, 'rb') as f:
                 obj_points = np.fromfile(f, dtype=np.float32).reshape(-1, 3)
 
-        obj_points = obj_points[:, :3]
+            baselink_to_model = np.array([[7.96326711e-04, - 9.99999683e-01, 5.55111512e-16],
+                                          [7.96326458e-04, 6.34136230e-07, - 9.99999683e-01],
+                                          [9.99999366e-01, 7.96326458e-04, 7.96326711e-04]])
 
-        #Shuffle points order rondomly
-        shuffled_indices = np.random.permutation(len(obj_points))
-        obj_points = obj_points[shuffled_indices]
+            obj_points = obj_points[:, :3]
+            obj_points[:, :3] += bounding_box[:3]  # normalized to real position
 
-        obj_points = self.pad_or_sample_points(obj_points, self.num_points)
+            obj_points[:, :3] = np.dot(baselink_to_model, obj_points[:, :3].T).T
+            obj_points[:, 1] += bounding_box[5] / 2
 
+            center_to_corner_box3d_numpy = self.center_to_corner_box3d_numpy(bounding_box[0:3], bounding_box[3:6],
+                                                                             bounding_box[6])
 
-        obj_points[:, :3] += self.bounding_boxes[idx][:3]  # normalized to real position
+            rotated_corners = np.dot(baselink_to_model, center_to_corner_box3d_numpy[:, :3].T).T
 
-        bounding_box = self.bounding_boxes[idx]
+            center = np.mean(rotated_corners, axis=0)
+            x, y, z = center
 
-        T = np.array([
-            [1, 0, 0],
-            [0, 0, -1],
-            [0, 1, 0]
-        ])
+            # Calculate yaw angle
+            edge_direction = rotated_corners[1] - rotated_corners[0]  # Direction of one edge of the box
+            yaw = np.arctan2(edge_direction[0], edge_direction[2])
 
-        obj_points = np.dot(obj_points, T.T)
+            bounding_box[0], bounding_box[1], bounding_box[2] = x, y, z
+            bounding_box[6] = yaw
 
-        # Step 2: Transform the bounding boxes
-        # Swap y and z axes for centers
+            return None
 
-        bounding_box[:3] = np.dot(bounding_box[:3], T.T)
-        bounding_box[6] = -bounding_box[6]
-        bounding_box[1] -= bounding_box[5] / 2
+        # #Shuffle points order rondomly
+        # shuffled_indices = np.random.permutation(len(obj_points))
+        # obj_points = obj_points[shuffled_indices]
 
+        # original_point_count = len(obj_points)
+        # obj_points = self.pad_or_sample_points(obj_points, self.num_points)
 
-        if self.augment_data:
+        # T = np.array([
+        #     [1, 0, 0],
+        #     [0, 0, -1],
+        #     [0, 1, 0]
+        # ])
+        #
+        # obj_points = np.dot(obj_points, T.T)
+        #
+        # # Step 2: Transform the bounding boxes
+        # # Swap y and z axes for centers
+        #
+        # bounding_box[:3] = np.dot(bounding_box[:3], T.T)
+        # bounding_box[6] = -bounding_box[6]
+        # bounding_box[1] -= bounding_box[5] / 2
 
-            if self.use_mirror:
-                if np.random.random() > 0.5:  # 50% chance flipping
-                    obj_points[:, 0] *= -1
-                    bounding_box[0] *= -1
-                    bounding_box[6] = np.pi - bounding_box[6]
+        # if original_point_count > 20:
 
-            if self.use_shift:
-                shifter = np.random.uniform(0.95, 1.05)
-                obj_points[:, :2] *= shifter  # Shift the point cloud
-                bounding_box[:2] *= shifter  # Shift the center of the bounding box
-
-            # obj_points, bounding_box = self.rotate_point_cloud(obj_points, bounding_box)
+        # if self.augment_data:
+        #     # obj_points, bounding_box = self.rotate_point_cloud(obj_points, bounding_box)
+        #
+        #     if self.use_mirror:
+        #         if np.random.random() > 0.5:  # 50% chance flipping
+        #             obj_points[:, 0] *= -1
+        #             bounding_box[0] *= -1
+        #             bounding_box[6] = np.pi - bounding_box[6]
+        #
+        #     if self.use_shift:
+        #         shifter = np.random.uniform(0.95, 1.05)
+        #         obj_points[:, 0] *= shifter  # Shift the point cloud
+        #         obj_points[:, 2] *= shifter  # Shift the point cloud
+        #         bounding_box[0] *= shifter  # Shift the center of the bounding box
+        #         bounding_box[2] *= shifter  # Shift the center of the bounding box
+        #
+        #     # obj_points, bounding_box = self.rotate_point_cloud(obj_points, bounding_box)
 
         one_hot_vector = np.zeros(len(self.classes))
         ind = self.classes.index(self.labels[idx])
@@ -378,14 +433,64 @@ class PointCloudDataset(Dataset):
         box_size = bounding_box[3:6]
 
         size_class, residual = size2class(box_size, self.labels[idx])
+
         yaw = bounding_box[6]
-        angle_class, angle_residual = angle2class(yaw,
-                                                       NUM_HEADING_BIN)
+        angle_class, angle_residual = angle2class(yaw, NUM_HEADING_BIN)
 
         seg = 0
         rot_angle = 0
         return obj_points, seg, box_center, angle_class, angle_residual, \
             size_class, residual, rot_angle, one_hot_vector
+
+    def center_to_corner_box3d_numpy(self, centers, sizes, angles, origin=(0.5, 0.5, 0.5)):
+
+        is_batched = True
+        if len(centers.shape) == 1:
+            centers = np.expand_dims(centers, axis=0)
+            sizes = np.expand_dims(sizes, axis=0)
+            angles = np.expand_dims(angles, axis=0)
+            is_batched = False
+
+        N = centers.shape[0]
+
+        l, w, h = sizes[:, 0], sizes[:, 1], sizes[:, 2]
+
+        # Compute the shift for each dimension based on the origin
+        ox, oy, oz = origin
+        x_shift = l * (0.5 - ox)
+        y_shift = w * (0.5 - oy)
+        z_shift = h * (0.5 - oz)
+
+        # Create corner points in the local box coordinate system
+        x_corners = np.stack([0.5 * l, 0.5 * l, -0.5 * l, -0.5 * l, 0.5 * l, 0.5 * l, -0.5 * l, -0.5 * l],
+                             axis=1) - np.expand_dims(x_shift, axis=1)
+        y_corners = np.stack([0.5 * w, -0.5 * w, -0.5 * w, 0.5 * w, 0.5 * w, -0.5 * w, -0.5 * w, 0.5 * w],
+                             axis=1) - np.expand_dims(y_shift, axis=1)
+        z_corners = np.stack([0.5 * h, 0.5 * h, 0.5 * h, 0.5 * h, -0.5 * h, -0.5 * h, -0.5 * h, -0.5 * h],
+                             axis=1) - np.expand_dims(z_shift, axis=1)
+
+        corners = np.stack((x_corners, y_corners, z_corners), axis=-1)  # shape (N, 8, 3)
+
+        # Rotation matrix around z-axis
+        cos_angles = np.cos(angles)
+        sin_angles = np.sin(angles)
+
+        rotation_matrix = np.stack([
+            np.stack([cos_angles, -sin_angles, np.zeros_like(cos_angles)], axis=1),
+            np.stack([sin_angles, cos_angles, np.zeros_like(cos_angles)], axis=1),
+            np.stack([np.zeros_like(cos_angles), np.zeros_like(cos_angles), np.ones_like(cos_angles)], axis=1),
+        ], axis=1)  # shape (N, 3, 3)
+
+        # Apply rotation to each corner
+        rotated_corners = np.einsum('bij,bkj->bki', rotation_matrix, corners)  # shape (N, 8, 3)
+
+        # Translate corners to the center
+        corners_3d = rotated_corners + np.expand_dims(centers, axis=1)  # shape (N, 8, 3)
+
+        if not is_batched:
+            corners_3d = np.squeeze(corners_3d, axis=0)
+
+        return corners_3d
 
     def pad_or_sample_points(self, points, num_points):
         # Padding using duplicate of the correct points, maybe alternative padding with zeros
@@ -399,7 +504,6 @@ class PointCloudDataset(Dataset):
         else:
             sampled_points = points
         return sampled_points
-
 
     def mirror_point_cloud(self, point_cloud, label, plane):
         """
@@ -419,6 +523,45 @@ class PointCloudDataset(Dataset):
         mirrored_label[6] = -mirrored_label[6]
 
         return mirrored_point_cloud, mirrored_label
+
+    def rotate_point_cloud(self, pc, label, min_angle=-np.pi / 2, max_angle=np.pi / 2):
+        angle = np.random.uniform(min_angle, max_angle)
+
+        cosval = np.cos(angle)
+        sinval = np.sin(angle)
+        rotmat = np.array([[cosval, -sinval], [sinval, cosval]])
+        pc[:, [0, 2]] = np.dot(pc[:, [0, 2]], np.transpose(rotmat))
+
+        expanded_label = np.expand_dims(label, 0)
+        expanded_label[:, [0, 2]] = np.dot(expanded_label[:, [0, 2]], np.transpose(rotmat))
+
+        unsqu_label = expanded_label.squeeze()
+        unsqu_label[6] = unsqu_label[6] - angle
+
+        return pc, unsqu_label
+
+    def corners_to_bounding_box(self, corners):
+        """
+        Convert 8 corners of a 3D bounding box to (x, y, z, width, length, height, yaw).
+
+        :param corners: List or array of shape (8, 3) containing corner points of the bounding box.
+        :return: List [x, y, z, width, length, height, yaw] representing the bounding box parameters.
+        """
+        # Compute center (x, y, z)
+        center = np.mean(corners, axis=0)
+        x, y, z = center
+
+        # Determine dimensions (width, length, height)
+        width = np.max(corners[:, 0]) - np.min(corners[:, 0])
+        length = np.max(corners[:, 1]) - np.min(corners[:, 1])
+        height = np.max(corners[:, 2]) - np.min(corners[:, 2])
+
+        # Calculate yaw angle
+        edge_direction = corners[1] - corners[0]  # Direction of one edge of the box
+        yaw = np.arctan2(edge_direction[1], edge_direction[0])
+
+        return [x, y, z, width, length, height, yaw]
+
 
 # ----------------------------------
 # Helper functions for evaluation
@@ -503,7 +646,47 @@ def compute_box3d_iou(center_pred,
         iou3d_list.append(iou_3d)
         iou2d_list.append(iou_2d)
     return np.array(iou2d_list, dtype=np.float32), \
-           np.array(iou3d_list, dtype=np.float32)
+        np.array(iou3d_list, dtype=np.float32)
+
+
+def box3d_from_prediction(center_pred,
+                          heading_logits, heading_residuals,
+                          size_logits, size_residuals):
+    ''' Compute 3D bounding box IoU from network output and labels.
+    All inputs are numpy arrays.
+    Inputs:
+        center_pred: (B,3)
+        heading_logits: (B,NUM_HEADING_BIN)
+        heading_residuals: (B,NUM_HEADING_BIN)
+        size_logits: (B,NUM_SIZE_CLUSTER)
+        size_residuals: (B,NUM_SIZE_CLUSTER,3)
+        center_label: (B,3)
+        heading_class_label: (B,)
+        heading_residual_label: (B,)
+        size_class_label: (B,)
+        size_residual_label: (B,3)
+    Output:
+        iou2ds: (B,) birdeye view oriented 2d box ious
+        iou3ds: (B,) 3d box ious
+    '''
+    batch_size = heading_logits.shape[0]
+    heading_class = np.argmax(heading_logits, 1)  # B
+    heading_residual = np.array([heading_residuals[i, heading_class[i]] \
+                                 for i in range(batch_size)])  # B,
+    size_class = np.argmax(size_logits, 1)  # B
+    size_residual = np.vstack([size_residuals[i, size_class[i], :] \
+                               for i in range(batch_size)])
+
+    boxes = []
+    for i in range(batch_size):
+        heading_angle = class2angle(heading_class[i],
+                                    heading_residual[i], NUM_HEADING_BIN)
+        box_size = class2size(size_class[i], size_residual[i])
+        box = {'center': center_pred[i],
+               'heading_angle': heading_angle,
+               'box_size': box_size}
+        boxes.append(box)
+    return boxes
 
 
 def from_prediction_to_label_format(center, angle_class, angle_res, \
